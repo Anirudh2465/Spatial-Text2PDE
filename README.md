@@ -24,6 +24,8 @@ The codebase is organized into core modules (`src`) and executable scripts (`scr
 │   ├── 05_diffusion/          # Latent Diffusion Refinement
 │   └── 99_utils/              # Helper utilites
 ├── ae_cylinder.ckpt           # Pretrained Autoencoder Weights (Required)
+├── ae_finetuned.pth           # Fine-tuned Autoencoder (Generated)
+├── fno_checkpoint.pth         # Verified FNO Model (Generated)
 ├── ldm_DiT_text_cylinder.ckpt # Pretrained DiT Weights (Required)
 ├── train_downsampled_labeled.h5 # Raw Dataset (Required)
 ├── train_grid_64.h5           # Preprocessed Grid Dataset (Generated)
@@ -79,7 +81,7 @@ python scripts/04_autoencoder/validate_integration.py
 - **Sampling**: DDIM Sampler (SDEdit) for deterministic refinement.
 
 1. **Verify DiT Model**:
-   Loads the DiT checkpoint and performs a dry-run forward pass to ensure verified integration.
+   Loads the DiT checkpoint and performs a dry-run forward pass to ensure verified integration.h
    ```bash
    python scripts/05_diffusion/verify_dit.py
    ```
