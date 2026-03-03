@@ -44,10 +44,13 @@ def train():
     
     print(f"Using device: {device}")
     
-    dataset = ImageCylinderDataset(data_path, tokenizer_path, stat_path, num_frames=24)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True, collate_fn=collate_fn)
+    train_dataset = ImageCylinderDataset(data_path, tokenizer_path, stat_path, num_frames=24, split='train')
+    val_dataset = ImageCylinderDataset(data_path, tokenizer_path, stat_path, num_frames=24, split='val')
     
-    vocab_size = dataset.tokenizer.get_vocab_size()
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, drop_last=False, collate_fn=collate_fn)
+    
+    vocab_size = train_dataset.tokenizer.get_vocab_size()
     
     # Larger Model
     model = ImageMLLM(vocab_size=vocab_size, vision_dim=512, llm_dim=512, img_size=64, patch_size=16)
@@ -58,10 +61,12 @@ def train():
     os.makedirs("checkpoints/image_mllm", exist_ok=True)
     scaler = torch.amp.GradScaler('cuda')
     
-    model.train()
+    best_val_loss = float('inf')
+    
     for epoch in range(epochs):
+        model.train()
         epoch_loss = 0
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}")
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]")
         for i_batch, batch in enumerate(pbar):
             image = batch['image'].to(device)
             input_ids = batch['input_ids'].to(device)
@@ -93,23 +98,49 @@ def train():
             epoch_loss += (loss.item() * accumulation_steps)
             pbar.set_postfix({'loss': f"{loss.item() * accumulation_steps:.4f}"})
             
-        avg_loss = epoch_loss / max(1, len(dataloader))
-        print(f"Epoch {epoch+1} Average Loss: {avg_loss:.4f}")
+        avg_train_loss = epoch_loss / max(1, len(train_loader))
         
+        # Validation
+        model.eval()
+        val_loss = 0
+        with torch.no_grad():
+            for batch in val_loader:
+                image = batch['image'].to(device)
+                input_ids = batch['input_ids'].to(device)
+                labels = batch['labels'].to(device)
+                numeric_mask = batch['numeric_mask'].to(device)
+                
+                with torch.amp.autocast('cuda'):
+                    _, loss = model(
+                        image, 
+                        input_ids, 
+                        targets=labels, 
+                        numeric_mask=numeric_mask,
+                        numeric_loss_lambda=numeric_loss_lambda
+                    )
+                if loss is not None and loss.item() != 0.0:
+                    val_loss += loss.item()
+                    
+        avg_val_loss = val_loss / max(1, len(val_loader))
+        print(f"Epoch {epoch+1} - Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
+        
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), "checkpoints/image_mllm/best_model.pth")
+            print(f"Saved new best model with Val Loss: {best_val_loss:.4f}")
+            
         torch.save(model.state_dict(), f"checkpoints/image_mllm/epoch_{epoch+1}.pth")
         
         # Validation Demo
-        model.eval()
         with torch.no_grad():
-            item = dataset[0] # Try first frame
+            item = val_dataset[0] # Try first frame from val set
             test_img = item['image'].unsqueeze(0).to(device)
-            sos = dataset.tokenizer.token_to_id("[SOS]")
+            sos = val_dataset.tokenizer.token_to_id("[SOS]")
             prompt_ids = torch.tensor([[sos]], device=device)
             
             gen_ids = model.generate(test_img, prompt_ids, max_new_tokens=40)
-            gen_text = dataset.tokenizer.decode(gen_ids[0].tolist(), skip_special_tokens=False)
+            gen_text = val_dataset.tokenizer.decode(gen_ids[0].tolist(), skip_special_tokens=False)
             print(f"Sample Generation: {gen_text}")
-        model.train()
 
 if __name__ == "__main__":
     train()
